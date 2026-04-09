@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VoiceStone</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="brand-mark">VS</span>
+        <span class="brand-name">VoiceStone</span>
+      </div>
+      <div class="topbar-actions">
+        <button class="lang-toggle" id="lang-toggle" aria-label="Change language">
+          <span data-lang="fr">FR</span>
+          <span class="sep">/</span>
+          <span data-lang="en">EN</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="stage">
+    <section class="intro" id="intro-panel">
+      <h1 class="title" data-i18n="title">VoiceStone</h1>
+      <p class="tagline" data-i18n="tagline">
+        Devine la carte Hearthstone à partir de sa réplique modifiée.
+      </p>
+      <div class="intro-actions">
+        <button class="btn btn-primary" id="start-btn" data-i18n="start">
+          Commencer
+        </button>
+      </div>
+      <div class="loading" id="loading" hidden>
+        <div class="spinner"></div>
+        <span data-i18n="loading">Chargement des cartes…</span>
+      </div>
+    </section>
+
+    <section class="game" id="game-panel" hidden>
+      <div class="scoreboard">
+        <div class="score">
+          <span class="score-label" data-i18n="score">Score</span>
+          <span class="score-value" id="score-value">0</span>
+        </div>
+        <div class="score">
+          <span class="score-label" data-i18n="round">Manche</span>
+          <span class="score-value" id="round-value">1</span>
+        </div>
+        <div class="score">
+          <span class="score-label" data-i18n="streak">Série</span>
+          <span class="score-value" id="streak-value">0</span>
+        </div>
+      </div>
+
+      <div class="effect-banner">
+        <span class="effect-label" data-i18n="effect">Effet</span>
+        <span class="effect-value" id="effect-value">—</span>
+      </div>
+
+      <div class="player">
+        <button class="play-btn" id="play-btn" aria-label="Play voiceline">
+          <svg viewBox="0 0 24 24" class="play-icon">
+            <path d="M8 5v14l11-7z" fill="currentColor" />
+          </svg>
+        </button>
+        <div class="player-meta">
+          <span class="player-hint" data-i18n="play_hint">
+            Clique pour écouter la réplique
+          </span>
+          <span class="plays-left">
+            <span data-i18n="plays_left">Écoutes restantes</span>
+            <strong id="plays-left-value">3</strong>
+          </span>
+        </div>
+      </div>
+
+      <div class="hints" id="hints">
+        <!-- hints injected here -->
+      </div>
+
+      <form class="guess-form" id="guess-form" autocomplete="off">
+        <div class="guess-input-wrap">
+          <input
+            type="text"
+            class="guess-input"
+            id="guess-input"
+            data-i18n-placeholder="guess_placeholder"
+            placeholder="Nom de la carte…"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <div class="suggestions" id="suggestions" hidden></div>
+        </div>
+        <button type="submit" class="btn btn-primary" data-i18n="guess">
+          Deviner
+        </button>
+        <button type="button" class="btn btn-ghost" id="skip-btn" data-i18n="skip">
+          Passer
+        </button>
+      </form>
+
+      <div class="feedback" id="feedback" hidden></div>
+
+      <div class="reveal" id="reveal" hidden>
+        <div class="reveal-card" id="reveal-card"></div>
+        <button class="btn btn-primary" id="next-btn" data-i18n="next">
+          Carte suivante
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span data-i18n="footer">
+      Non affilié à Blizzard. Données fournies par HearthstoneJSON.
+    </span>
+  </footer>
+
+  <script src="js/i18n.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/card-search.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/game.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
