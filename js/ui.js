@@ -9,6 +9,7 @@ const UI = (() => {
     introPanel: $("#intro-panel"),
     gamePanel: $("#game-panel"),
     loading: $("#loading"),
+    introError: $("#intro-error"),
     startBtn: $("#start-btn"),
     langToggle: $("#lang-toggle"),
 
@@ -46,6 +47,16 @@ const UI = (() => {
   function showLoading(show) {
     el.loading.hidden = !show;
     el.startBtn.disabled = show;
+  }
+
+  function showError(message) {
+    if (!message) {
+      el.introError.hidden = true;
+      el.introError.textContent = "";
+      return;
+    }
+    el.introError.hidden = false;
+    el.introError.textContent = message;
   }
 
   function setScore(score) {
@@ -185,6 +196,7 @@ const UI = (() => {
     showIntro,
     showGame,
     showLoading,
+    showError,
     setScore,
     setRound,
     setStreak,

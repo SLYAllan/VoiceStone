@@ -20,9 +20,13 @@ const AudioFX = (() => {
     return ctx;
   }
 
+  // Remember which (base, pattern) combo has been confirmed working so we
+  // can probe it first for subsequent cards instead of re-trying every combo.
+  let knownGood = null; // { base, pattern }
+
   async function probeUrl(url) {
     try {
-      const res = await fetch(url, { method: "GET" });
+      const res = await fetch(url);
       if (!res.ok) return null;
       const arr = await res.arrayBuffer();
       const audioCtx = getContext();
@@ -30,24 +34,42 @@ const AudioFX = (() => {
       const buf = await audioCtx.decodeAudioData(arr.slice(0));
       return buf;
     } catch (e) {
+      console.warn(`[VoiceStone] probe failed ${url}:`, e && e.message);
       return null;
     }
   }
 
   /**
    * Try each candidate URL for a card until one decodes successfully.
+   * Once a (base, pattern) combo works, subsequent lookups try that combo
+   * first to avoid O(N*candidates) probing.
    * Returns { buffer, url } or null.
    */
   async function loadCardVoiceline(card) {
-    const candidates = API.audioCandidatesFor(card.id);
-    for (const url of candidates) {
-      if (bufferCache.has(url)) {
-        return { buffer: bufferCache.get(url), url };
+    let candidates = API.audioCandidatesFor(card.id);
+
+    // Prioritize previously-successful combo.
+    if (knownGood) {
+      const preferredUrl = API.audioUrlFor(
+        card.id,
+        knownGood.base,
+        knownGood.pattern
+      );
+      candidates = [
+        { url: preferredUrl, base: knownGood.base, pattern: knownGood.pattern },
+        ...candidates.filter((c) => c.url !== preferredUrl),
+      ];
+    }
+
+    for (const cand of candidates) {
+      if (bufferCache.has(cand.url)) {
+        return { buffer: bufferCache.get(cand.url), url: cand.url };
       }
-      const buf = await probeUrl(url);
+      const buf = await probeUrl(cand.url);
       if (buf) {
-        bufferCache.set(url, buf);
-        return { buffer: buf, url };
+        bufferCache.set(cand.url, buf);
+        knownGood = { base: cand.base, pattern: cand.pattern };
+        return { buffer: buf, url: cand.url };
       }
     }
     return null;

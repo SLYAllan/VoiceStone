@@ -7,7 +7,13 @@ const API = (() => {
   const CARDS_URL = (locale) =>
     `https://api.hearthstonejson.com/v1/latest/${locale}/cards.json`;
 
-  const AUDIO_BASE = "https://audio.hearthstonejson.com/v1/";
+  // HearthstoneJSON audio is served from a few CDN endpoints depending on year.
+  // We'll probe several known base URLs; the first that responds 200 wins.
+  // Order matters — most likely first.
+  const AUDIO_BASES = [
+    "https://art.hearthstonejson.com/v1/sounds/",
+    "https://audio.hearthstonejson.com/v1/",
+  ];
 
   // Same exclusions as HearthDoku: skip battlegrounds, mercenaries, tavern brawl, etc.
   // These prefixes show up at the start of the `set` field.
@@ -28,20 +34,16 @@ const API = (() => {
   // Keep only these card types in the pool.
   const ALLOWED_TYPES = new Set(["MINION", "SPELL", "WEAPON", "HERO", "LOCATION"]);
 
-  // Voiceline sound-kit categories we'll consider (card's soundFamily/pixiv vary by set).
-  // HearthstoneJSON exposes per-card `name`, `id`, `cardClass`, `cost`, `type`, etc.
-  // It does NOT always give direct URLs. We derive audio URLs from the card `id`.
-  // Common playable voicelines are under `{id}_PLAY_01.ogg` or similar.
-  //
-  // Because we can't always predict the exact filename, we try a small set of
-  // candidates per card and cache the first one that resolves to HTTP 200.
-  const VOICELINE_CANDIDATES = [
-    "_PLAY_01.ogg",
-    "_PLAY_02.ogg",
-    "_ATTACK_01.ogg",
-    "_ATTACK_02.ogg",
-    "_DEATH_01.ogg",
-    ".ogg",
+  // HearthstoneJSON doesn't directly expose voiceline filenames on the card
+  // record, so we probe a small set of likely (prefix, suffix) combinations
+  // for each card id. Order matters — most likely first.
+  const VOICELINE_PATTERNS = [
+    { prefix: "VO_", suffix: "_Play_01.ogg" },
+    { prefix: "VO_", suffix: "_Play.ogg" },
+    { prefix: "", suffix: "_Play_01.ogg" },
+    { prefix: "VO_", suffix: "_Attack_01.ogg" },
+    { prefix: "", suffix: "_Attack_01.ogg" },
+    { prefix: "", suffix: ".ogg" },
   ];
 
   const LS_KEY = (locale) => `voicestone.cards.${locale}`;
@@ -148,10 +150,25 @@ const API = (() => {
 
   /**
    * Build a list of candidate audio URLs for a card.
-   * We'll probe them in order; the first that loads wins.
+   * Each entry is { url, base, pattern } so the caller can remember which
+   * combination worked and prioritize it on subsequent lookups.
    */
   function audioCandidatesFor(cardId) {
-    return VOICELINE_CANDIDATES.map((suffix) => AUDIO_BASE + cardId + suffix);
+    const out = [];
+    for (const base of AUDIO_BASES) {
+      for (const pattern of VOICELINE_PATTERNS) {
+        out.push({
+          url: `${base}${pattern.prefix}${cardId}${pattern.suffix}`,
+          base,
+          pattern,
+        });
+      }
+    }
+    return out;
+  }
+
+  function audioUrlFor(cardId, base, pattern) {
+    return `${base}${pattern.prefix}${cardId}${pattern.suffix}`;
   }
 
   function getCards() {
@@ -162,16 +179,12 @@ const API = (() => {
     return cache.byName.get(normalizeName(name)) || null;
   }
 
-  function getAudioBase() {
-    return AUDIO_BASE;
-  }
-
   return {
     fetchCards,
     getCards,
     findByName,
     normalizeName,
     audioCandidatesFor,
-    getAudioBase,
+    audioUrlFor,
   };
 })();
