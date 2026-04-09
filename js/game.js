@@ -46,16 +46,20 @@ const Game = (() => {
 
     // Pick a card with a known voiceline — probe until we find one.
     let attempts = 0;
-    while (attempts < 40) {
+    const triedIds = [];
+    while (attempts < 20) {
       if (state.pool.length === 0) {
         state.pool = API.getCards().slice();
         shuffle(state.pool);
       }
       const card = state.pool.pop();
       attempts++;
+      triedIds.push(card.id);
       UI.setEffect("…");
+      console.log(`[VoiceStone] probing voicelines for ${card.id} (${card.name})`);
       const loaded = await AudioFX.loadCardVoiceline(card);
       if (loaded && loaded.buffer) {
+        console.log(`[VoiceStone] picked ${card.id} — audio ${loaded.url}`);
         const effect = AudioFX.randomEffect();
         state.current = { card, buffer: loaded.buffer, effect };
         UI.setEffect(I18n.t(effect.key));
@@ -64,8 +68,16 @@ const Game = (() => {
       }
       // No audio for this card — try the next one.
     }
-    // Give up after too many misses.
-    UI.showFeedback("info", I18n.t("api_error"));
+    // Give up after too many misses — surface a clear error so we know
+    // whether the voiceline URL scheme needs adjustment.
+    console.error(
+      "[VoiceStone] no voicelines found after probing cards:",
+      triedIds
+    );
+    UI.showFeedback(
+      "wrong",
+      `${I18n.t("no_audio")} (${triedIds.length} tried, see console)`
+    );
   }
 
   function play() {

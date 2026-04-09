@@ -67,7 +67,13 @@
   async function onStart() {
     try {
       UI.showLoading(true);
-      await API.fetchCards();
+      UI.showError(null);
+      console.log("[VoiceStone] fetching cards…");
+      const cards = await API.fetchCards();
+      console.log(`[VoiceStone] loaded ${cards.length} cards`);
+      if (!cards.length) {
+        throw new Error("0 cards after filtering — check API response.");
+      }
       Game.init();
       UI.showGame();
       UI.setScore(Game.state.score);
@@ -76,8 +82,10 @@
       UI.setPlaysLeft(3);
       await Game.nextRound();
     } catch (e) {
-      console.error(e);
-      alert(I18n.t("api_error"));
+      console.error("[VoiceStone] onStart failed:", e);
+      UI.showError(
+        `${I18n.t("api_error")}\n\n${e && e.message ? e.message : String(e)}`
+      );
     } finally {
       UI.showLoading(false);
     }
