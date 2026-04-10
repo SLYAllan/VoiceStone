@@ -1,99 +1,39 @@
 /* ============================================================
- * audio.js — Voiceline fetch + Web Audio API effects.
+ * audio.js — Voiceline playback via HTMLAudioElement.
+ *
+ * The GCS `hearthsounds` bucket doesn't send CORS headers, so
+ * Web Audio API (decodeAudioData + effect graph) can't run. A
+ * plain <audio> element, however, can play cross-origin media
+ * without CORS — we just lose access to the raw samples. That
+ * restricts us to effects expressible via playbackRate and
+ * preservesPitch, which is still enough for the core gimmick:
+ * high-pitched, low-pitched, slowed and sped-up voicelines.
  * ============================================================ */
 
 const AudioFX = (() => {
-  let ctx = null;
-  let currentSource = null;
-  let currentlyPlaying = false;
-  const bufferCache = new Map(); // url -> AudioBuffer
-
-  function getContext() {
-    if (!ctx) {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      ctx = new AC();
-    }
-    // Some browsers start the context suspended until a user gesture.
-    if (ctx.state === "suspended") {
-      ctx.resume().catch(() => {});
-    }
-    return ctx;
-  }
-
-  // Remember which (base, pattern) combo has been confirmed working so we
-  // can probe it first for subsequent cards instead of re-trying every combo.
-  let knownGood = null; // { base, pattern }
-
-  async function probeUrl(url) {
-    try {
-      const res = await fetch(url);
-      if (!res.ok) return null;
-      const arr = await res.arrayBuffer();
-      const audioCtx = getContext();
-      // decodeAudioData mutates the buffer on older WebKit — copy defensively.
-      const buf = await audioCtx.decodeAudioData(arr.slice(0));
-      return buf;
-    } catch (e) {
-      console.warn(`[VoiceStone] probe failed ${url}:`, e && e.message);
-      return null;
-    }
-  }
+  const audio = new Audio();
+  audio.preload = "auto";
+  audio.addEventListener("ended", () => {
+    document.dispatchEvent(new CustomEvent("audio:ended"));
+  });
+  audio.addEventListener("error", () => {
+    console.warn("[VoiceStone] audio error:", audio.error, audio.src);
+    document.dispatchEvent(new CustomEvent("audio:ended"));
+  });
 
   /**
-   * Try each candidate URL for a card until one decodes successfully.
-   * Once a (base, pattern) combo works, subsequent lookups try that combo
-   * first to avoid O(N*candidates) probing.
-   * Returns { buffer, url } or null.
-   */
-  async function loadCardVoiceline(card) {
-    let candidates = API.audioCandidatesFor(card.id);
-
-    // Prioritize previously-successful combo.
-    if (knownGood) {
-      const preferredUrl = API.audioUrlFor(
-        card.id,
-        knownGood.base,
-        knownGood.pattern
-      );
-      candidates = [
-        { url: preferredUrl, base: knownGood.base, pattern: knownGood.pattern },
-        ...candidates.filter((c) => c.url !== preferredUrl),
-      ];
-    }
-
-    for (const cand of candidates) {
-      if (bufferCache.has(cand.url)) {
-        return { buffer: bufferCache.get(cand.url), url: cand.url };
-      }
-      const buf = await probeUrl(cand.url);
-      if (buf) {
-        bufferCache.set(cand.url, buf);
-        knownGood = { base: cand.base, pattern: cand.pattern };
-        return { buffer: buf, url: cand.url };
-      }
-    }
-    return null;
-  }
-
-  /**
-   * The available modifier effects. Each effect returns a node graph:
-   *   { source, output, start(when), stop() }
-   * where `output` is the final node to connect to destination.
+   * Available effects. Each effect is expressed as a pair of
+   * (playbackRate, preservesPitch) applied to the <audio> element.
+   *   preservesPitch = false → pitch changes with rate (aigu/grave)
+   *   preservesPitch = true  → only tempo changes (rapide/lent)
    */
   const EFFECTS = {
-    pitch_up: { key: "effect_pitch_up", build: (buf) => pitchRateEffect(buf, 1.4) },
-    pitch_down: { key: "effect_pitch_down", build: (buf) => pitchRateEffect(buf, 0.7) },
-    slow: { key: "effect_slow", build: (buf) => pitchRateEffect(buf, 0.75) },
-    fast: { key: "effect_fast", build: (buf) => pitchRateEffect(buf, 1.5) },
-    reverse: { key: "effect_reverse", build: (buf) => reverseEffect(buf) },
-    reverb: { key: "effect_reverb", build: (buf) => reverbEffect(buf) },
-    lowpass: { key: "effect_lowpass", build: (buf) => filterEffect(buf, "lowpass", 600) },
-    highpass: {
-      key: "effect_highpass",
-      build: (buf) => filterEffect(buf, "highpass", 1400),
-    },
-    tremolo: { key: "effect_tremolo", build: (buf) => tremoloEffect(buf) },
-    robot: { key: "effect_robot", build: (buf) => robotEffect(buf) },
+    pitch_up: { key: "effect_pitch_up", rate: 1.5, preservesPitch: false },
+    pitch_down: { key: "effect_pitch_down", rate: 0.7, preservesPitch: false },
+    slow: { key: "effect_slow", rate: 0.65, preservesPitch: true },
+    fast: { key: "effect_fast", rate: 1.6, preservesPitch: true },
+    chipmunk: { key: "effect_pitch_up", rate: 1.75, preservesPitch: false },
+    giant: { key: "effect_pitch_down", rate: 0.55, preservesPitch: false },
   };
 
   const EFFECT_KEYS = Object.keys(EFFECTS);
@@ -103,169 +43,71 @@ const AudioFX = (() => {
     return { id: key, ...EFFECTS[key] };
   }
 
-  /* ---------- Effect builders ---------- */
-
-  function pitchRateEffect(buffer, rate) {
-    const c = getContext();
-    const src = c.createBufferSource();
-    src.buffer = buffer;
-    src.playbackRate.value = rate;
-    const gain = c.createGain();
-    gain.gain.value = 1;
-    src.connect(gain);
-    return { source: src, output: gain };
+  /**
+   * Pre-load the audio for a card. Resolves with `{ url }` when the
+   * file is ready to play, or `null` if it errors out.
+   */
+  function loadCardVoiceline(card) {
+    const url = API.audioUrlForCard(card);
+    if (!url) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      const probe = new Audio();
+      probe.preload = "auto";
+      let done = false;
+      const ok = () => {
+        if (done) return;
+        done = true;
+        cleanup();
+        resolve({ url });
+      };
+      const fail = () => {
+        if (done) return;
+        done = true;
+        cleanup();
+        console.warn("[VoiceStone] preload failed", url);
+        resolve(null);
+      };
+      const cleanup = () => {
+        probe.removeEventListener("canplaythrough", ok);
+        probe.removeEventListener("loadeddata", ok);
+        probe.removeEventListener("error", fail);
+      };
+      probe.addEventListener("canplaythrough", ok);
+      probe.addEventListener("loadeddata", ok);
+      probe.addEventListener("error", fail);
+      probe.src = url;
+      // Safety timeout — if the network stalls, give up.
+      setTimeout(fail, 6000);
+    });
   }
-
-  function reverseEffect(buffer) {
-    const reversed = reverseBuffer(buffer);
-    return pitchRateEffect(reversed, 1);
-  }
-
-  function reverseBuffer(buffer) {
-    const c = getContext();
-    const out = c.createBuffer(
-      buffer.numberOfChannels,
-      buffer.length,
-      buffer.sampleRate
-    );
-    for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
-      const src = buffer.getChannelData(ch);
-      const dst = out.getChannelData(ch);
-      for (let i = 0, n = src.length; i < n; i++) dst[i] = src[n - i - 1];
-    }
-    return out;
-  }
-
-  function reverbEffect(buffer) {
-    const c = getContext();
-    const src = c.createBufferSource();
-    src.buffer = buffer;
-    const convolver = c.createConvolver();
-    convolver.buffer = makeImpulseResponse(2.4, 2.2);
-    const dry = c.createGain();
-    const wet = c.createGain();
-    dry.gain.value = 0.5;
-    wet.gain.value = 0.7;
-    const merger = c.createGain();
-    src.connect(dry);
-    dry.connect(merger);
-    src.connect(convolver);
-    convolver.connect(wet);
-    wet.connect(merger);
-    return { source: src, output: merger };
-  }
-
-  function makeImpulseResponse(duration, decay) {
-    const c = getContext();
-    const rate = c.sampleRate;
-    const length = Math.max(1, Math.floor(rate * duration));
-    const impulse = c.createBuffer(2, length, rate);
-    for (let ch = 0; ch < 2; ch++) {
-      const data = impulse.getChannelData(ch);
-      for (let i = 0; i < length; i++) {
-        data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, decay);
-      }
-    }
-    return impulse;
-  }
-
-  function filterEffect(buffer, type, frequency) {
-    const c = getContext();
-    const src = c.createBufferSource();
-    src.buffer = buffer;
-    const filter = c.createBiquadFilter();
-    filter.type = type;
-    filter.frequency.value = frequency;
-    filter.Q.value = 1;
-    const gain = c.createGain();
-    gain.gain.value = type === "highpass" ? 2 : 1.4; // compensate lost energy
-    src.connect(filter);
-    filter.connect(gain);
-    return { source: src, output: gain };
-  }
-
-  function tremoloEffect(buffer) {
-    const c = getContext();
-    const src = c.createBufferSource();
-    src.buffer = buffer;
-    const gain = c.createGain();
-    // LFO modulating the gain between ~0.2 and 1.
-    const lfo = c.createOscillator();
-    const lfoGain = c.createGain();
-    lfo.frequency.value = 8;
-    lfoGain.gain.value = 0.4;
-    gain.gain.value = 0.6;
-    lfo.connect(lfoGain);
-    lfoGain.connect(gain.gain);
-    src.connect(gain);
-    lfo.start();
-    return {
-      source: src,
-      output: gain,
-      cleanup: () => {
-        try {
-          lfo.stop();
-        } catch (e) {}
-      },
-    };
-  }
-
-  function robotEffect(buffer) {
-    // Ring modulation (multiply signal by a sine wave) — classic robot voice.
-    const c = getContext();
-    const src = c.createBufferSource();
-    src.buffer = buffer;
-    const carrier = c.createOscillator();
-    carrier.frequency.value = 50;
-    const ringGain = c.createGain();
-    ringGain.gain.value = 0;
-    carrier.connect(ringGain.gain);
-    src.connect(ringGain);
-    carrier.start();
-    return {
-      source: src,
-      output: ringGain,
-      cleanup: () => {
-        try {
-          carrier.stop();
-        } catch (e) {}
-      },
-    };
-  }
-
-  /* ---------- Playback ---------- */
 
   function stop() {
-    if (currentSource) {
-      try {
-        currentSource.source.stop();
-      } catch (e) {}
-      if (currentSource.cleanup) currentSource.cleanup();
-      currentSource = null;
-    }
-    currentlyPlaying = false;
+    try {
+      audio.pause();
+      audio.currentTime = 0;
+    } catch (e) {}
   }
 
-  function playWithEffect(buffer, effect) {
+  function playWithEffect(loaded, effect) {
+    if (!loaded || !loaded.url) return;
     stop();
-    const c = getContext();
-    const node = effect.build(buffer);
-    node.output.connect(c.destination);
-    currentSource = node;
-    currentlyPlaying = true;
-    node.source.onended = () => {
-      if (node === currentSource) {
-        if (node.cleanup) node.cleanup();
-        currentSource = null;
-        currentlyPlaying = false;
-        document.dispatchEvent(new CustomEvent("audio:ended"));
-      }
-    };
-    node.source.start();
+    audio.src = loaded.url;
+    // mozPreservesPitch / webkitPreservesPitch for older engines
+    audio.preservesPitch = effect.preservesPitch;
+    if ("mozPreservesPitch" in audio) audio.mozPreservesPitch = effect.preservesPitch;
+    if ("webkitPreservesPitch" in audio)
+      audio.webkitPreservesPitch = effect.preservesPitch;
+    audio.playbackRate = effect.rate;
+    const p = audio.play();
+    if (p && p.catch) {
+      p.catch((err) => {
+        console.warn("[VoiceStone] playback rejected:", err && err.message);
+      });
+    }
   }
 
   function isPlaying() {
-    return currentlyPlaying;
+    return !audio.paused && !audio.ended;
   }
 
   return {
@@ -274,7 +116,6 @@ const AudioFX = (() => {
     playWithEffect,
     stop,
     isPlaying,
-    getContext,
     EFFECTS,
   };
 })();

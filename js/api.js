@@ -1,22 +1,22 @@
 /* ============================================================
  * api.js — HearthstoneJSON card data fetch, filter & cache.
- * Mirrors the HearthDoku filtering logic.
+ *
+ * Audio: files live in the public GCS bucket `hearthsounds`
+ * (https://storage.googleapis.com/hearthsounds/). The bucket
+ * doesn't send CORS headers, so Web Audio API can't decode from
+ * fetch — we play with a plain <audio> element instead.
+ * The mapping from card id → .wav filename is pre-baked in
+ * js/audio-index.json (generated from a bucket listing).
  * ============================================================ */
 
 const API = (() => {
   const CARDS_URL = (locale) =>
     `https://api.hearthstonejson.com/v1/latest/${locale}/cards.json`;
 
-  // HearthstoneJSON audio is served from a few CDN endpoints depending on year.
-  // We'll probe several known base URLs; the first that responds 200 wins.
-  // Order matters — most likely first.
-  const AUDIO_BASES = [
-    "https://art.hearthstonejson.com/v1/sounds/",
-    "https://audio.hearthstonejson.com/v1/",
-  ];
+  const AUDIO_BASE = "https://storage.googleapis.com/hearthsounds/";
+  const AUDIO_INDEX_URL = "js/audio-index.json";
 
   // Same exclusions as HearthDoku: skip battlegrounds, mercenaries, tavern brawl, etc.
-  // These prefixes show up at the start of the `set` field.
   const EXCLUDED_SET_PREFIXES = [
     "BATTLEGROUNDS",
     "MERCENARIES",
@@ -31,20 +31,7 @@ const API = (() => {
     "PROMO",
   ];
 
-  // Keep only these card types in the pool.
   const ALLOWED_TYPES = new Set(["MINION", "SPELL", "WEAPON", "HERO", "LOCATION"]);
-
-  // HearthstoneJSON doesn't directly expose voiceline filenames on the card
-  // record, so we probe a small set of likely (prefix, suffix) combinations
-  // for each card id. Order matters — most likely first.
-  const VOICELINE_PATTERNS = [
-    { prefix: "VO_", suffix: "_Play_01.ogg" },
-    { prefix: "VO_", suffix: "_Play.ogg" },
-    { prefix: "", suffix: "_Play_01.ogg" },
-    { prefix: "VO_", suffix: "_Attack_01.ogg" },
-    { prefix: "", suffix: "_Attack_01.ogg" },
-    { prefix: "", suffix: ".ogg" },
-  ];
 
   const LS_KEY = (locale) => `voicestone.cards.${locale}`;
 
@@ -55,13 +42,14 @@ const API = (() => {
     byName: new Map(),
   };
 
+  let audioIndex = null; // { cardId: "filename.wav", ... }
+
   function isExcludedSet(set) {
     if (!set) return true;
     return EXCLUDED_SET_PREFIXES.some((p) => set.startsWith(p));
   }
 
   function processCards(raw) {
-    // Keep only collectible, playable cards from allowed sets.
     return raw
       .filter((c) => c.collectible === true)
       .filter((c) => c.id && c.name)
@@ -76,21 +64,29 @@ const API = (() => {
         type: c.type,
         rarity: c.rarity || "FREE",
         set: c.set,
-        text: c.text || "",
-        attack: c.attack ?? null,
-        health: c.health ?? null,
       }));
+  }
+
+  async function fetchAudioIndex() {
+    if (audioIndex) return audioIndex;
+    const res = await fetch(AUDIO_INDEX_URL, { cache: "force-cache" });
+    if (!res.ok) throw new Error(`audio-index.json HTTP ${res.status}`);
+    audioIndex = await res.json();
+    return audioIndex;
   }
 
   async function fetchCards() {
     const locale = I18n.getLang() === "fr" ? "frFR" : "enUS";
 
-    // In-memory cache hit
+    // Load the audio index in parallel with cards when possible.
+    const audioPromise = fetchAudioIndex();
+
     if (cache.locale === locale && cache.cards.length > 0) {
+      await audioPromise;
       return cache.cards;
     }
 
-    // localStorage cache (small TTL so data stays fresh between patches)
+    // localStorage cache (24h TTL)
     try {
       const stored = localStorage.getItem(LS_KEY(locale));
       if (stored) {
@@ -102,6 +98,8 @@ const API = (() => {
           Array.isArray(parsed.cards)
         ) {
           setCache(locale, parsed.cards);
+          await audioPromise;
+          filterByAudio();
           return cache.cards;
         }
       }
@@ -110,7 +108,7 @@ const API = (() => {
     }
 
     const res = await fetch(CARDS_URL(locale));
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`cards.json HTTP ${res.status}`);
     const raw = await res.json();
     const processed = processCards(raw);
 
@@ -120,11 +118,27 @@ const API = (() => {
         JSON.stringify({ ts: Date.now(), cards: processed })
       );
     } catch (e) {
-      // Quota exceeded — that's fine, we still have in-memory cache.
+      /* quota exceeded */
     }
 
     setCache(locale, processed);
+    await audioPromise;
+    filterByAudio();
     return cache.cards;
+  }
+
+  /**
+   * Drop cards that have no voiceline in the pre-baked index, so the
+   * game never picks a card without audio.
+   */
+  function filterByAudio() {
+    if (!audioIndex) return;
+    const before = cache.cards.length;
+    const withAudio = cache.cards.filter((c) => audioIndex[c.id]);
+    setCache(cache.locale, withAudio);
+    console.log(
+      `[VoiceStone] ${withAudio.length}/${before} cards have a voiceline`
+    );
   }
 
   function setCache(locale, cards) {
@@ -134,9 +148,6 @@ const API = (() => {
     cache.byName = new Map(cards.map((c) => [normalizeName(c.name), c]));
   }
 
-  /**
-   * Normalize a name for comparison: lowercase, strip accents, trim punctuation.
-   */
   function normalizeName(name) {
     if (!name) return "";
     return name
@@ -148,27 +159,11 @@ const API = (() => {
       .trim();
   }
 
-  /**
-   * Build a list of candidate audio URLs for a card.
-   * Each entry is { url, base, pattern } so the caller can remember which
-   * combination worked and prioritize it on subsequent lookups.
-   */
-  function audioCandidatesFor(cardId) {
-    const out = [];
-    for (const base of AUDIO_BASES) {
-      for (const pattern of VOICELINE_PATTERNS) {
-        out.push({
-          url: `${base}${pattern.prefix}${cardId}${pattern.suffix}`,
-          base,
-          pattern,
-        });
-      }
-    }
-    return out;
-  }
-
-  function audioUrlFor(cardId, base, pattern) {
-    return `${base}${pattern.prefix}${cardId}${pattern.suffix}`;
+  function audioUrlForCard(card) {
+    if (!audioIndex) return null;
+    const file = audioIndex[card.id];
+    if (!file) return null;
+    return AUDIO_BASE + file;
   }
 
   function getCards() {
@@ -184,7 +179,6 @@ const API = (() => {
     getCards,
     findByName,
     normalizeName,
-    audioCandidatesFor,
-    audioUrlFor,
+    audioUrlForCard,
   };
 })();

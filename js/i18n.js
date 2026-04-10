@@ -40,17 +40,11 @@ const I18n = (() => {
       hint_type: "Type",
       hint_rarity: "Rareté",
 
-      // Effects
+      // Effects (HTMLAudioElement-compatible: playbackRate + preservesPitch)
       effect_pitch_up: "Voix aiguë",
       effect_pitch_down: "Voix grave",
       effect_slow: "Ralenti",
       effect_fast: "Accéléré",
-      effect_reverse: "Inversé",
-      effect_reverb: "Écho de cathédrale",
-      effect_lowpass: "Voix étouffée",
-      effect_highpass: "Voix téléphonique",
-      effect_tremolo: "Tremblement",
-      effect_robot: "Voix robotique",
 
       // Classes (card data sometimes uses English keys)
       class_DRUID: "Druide",
@@ -116,12 +110,6 @@ const I18n = (() => {
       effect_pitch_down: "Low-pitched",
       effect_slow: "Slowed down",
       effect_fast: "Sped up",
-      effect_reverse: "Reversed",
-      effect_reverb: "Cathedral echo",
-      effect_lowpass: "Muffled",
-      effect_highpass: "Phone filter",
-      effect_tremolo: "Tremolo",
-      effect_robot: "Robotic",
 
       class_DRUID: "Druid",
       class_HUNTER: "Hunter",
