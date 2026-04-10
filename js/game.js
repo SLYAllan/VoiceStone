@@ -9,7 +9,7 @@ const Game = (() => {
 
   const state = {
     pool: [],
-    current: null, // { card, buffer, effect }
+    current: null, // { card, loaded, effect }
     attempts: 0,
     playsLeft: MAX_PLAYS,
     hintsShown: 0, // index into HINT_ORDER
@@ -44,40 +44,29 @@ const Game = (() => {
     UI.setPlaysLeft(state.playsLeft);
     UI.setRound(state.round);
 
-    // Pick a card with a known voiceline — probe until we find one.
+    // All cards in the pool are guaranteed to have a voiceline (the
+    // pool is filtered at fetchCards() time). Still retry a few times
+    // in case a specific file fails to preload (network glitch).
     let attempts = 0;
-    const triedIds = [];
-    while (attempts < 20) {
+    while (attempts < 5) {
       if (state.pool.length === 0) {
         state.pool = API.getCards().slice();
         shuffle(state.pool);
       }
       const card = state.pool.pop();
       attempts++;
-      triedIds.push(card.id);
       UI.setEffect("…");
-      console.log(`[VoiceStone] probing voicelines for ${card.id} (${card.name})`);
+      console.log(`[VoiceStone] loading voiceline for ${card.id} (${card.name})`);
       const loaded = await AudioFX.loadCardVoiceline(card);
-      if (loaded && loaded.buffer) {
-        console.log(`[VoiceStone] picked ${card.id} — audio ${loaded.url}`);
+      if (loaded) {
         const effect = AudioFX.randomEffect();
-        state.current = { card, buffer: loaded.buffer, effect };
+        state.current = { card, loaded, effect };
         UI.setEffect(I18n.t(effect.key));
         UI.focusGuess();
         return;
       }
-      // No audio for this card — try the next one.
     }
-    // Give up after too many misses — surface a clear error so we know
-    // whether the voiceline URL scheme needs adjustment.
-    console.error(
-      "[VoiceStone] no voicelines found after probing cards:",
-      triedIds
-    );
-    UI.showFeedback(
-      "wrong",
-      `${I18n.t("no_audio")} (${triedIds.length} tried, see console)`
-    );
+    UI.showFeedback("wrong", I18n.t("no_audio"));
   }
 
   function play() {
@@ -86,7 +75,7 @@ const Game = (() => {
     state.playsLeft--;
     UI.setPlaysLeft(state.playsLeft);
     UI.setPlaying(true);
-    AudioFX.playWithEffect(state.current.buffer, state.current.effect);
+    AudioFX.playWithEffect(state.current.loaded, state.current.effect);
   }
 
   function submitGuess(rawGuess) {
